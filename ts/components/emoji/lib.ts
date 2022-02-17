@@ -34,6 +34,8 @@ export type SizeClassType =
   | 'extra-large'
   | 'max';
 
+export type EmojiType = 'apple' | 'google';
+
 export type EmojiSkinVariation = {
   unified: string;
   non_qualified: null;
@@ -77,7 +79,7 @@ export type EmojiData = {
 };
 
 const data = (untypedData as Array<EmojiData>)
-  .filter(emoji => emoji.has_img_apple)
+  .filter(emoji => emoji.has_img_apple || emoji.has_img_google)
   .map(emoji =>
     // Why this weird map?
     // the emoji dataset has two separate categories for Emotions and People
@@ -96,8 +98,28 @@ const ROOT_PATH = get(
   ''
 );
 
-const makeImagePath = (src: string) => {
-  return `${ROOT_PATH}node_modules/emoji-datasource-apple/img/apple/64/${src}`;
+const makeImagePath = (
+  emoji: EmojiData | EmojiSkinVariation,
+  type: EmojiType
+) => {
+  const applePath = `${ROOT_PATH}node_modules/emoji-datasource-apple/img/apple/64/${emoji.image}`;
+  const googlePath = `${ROOT_PATH}node_modules/emoji-datasource-google/img/google/64/${emoji.image}`;
+
+  switch (type) {
+    case 'apple':
+      if (!emoji.has_img_apple) {
+        return googlePath;
+      }
+      return applePath;
+    case 'google':
+      if (!emoji.has_img_google) {
+        return applePath;
+      }
+      return googlePath;
+
+    default:
+      throw new Error(`Invalid emoji type "${type}"`);
+  }
 };
 
 const imageQueue = new PQueue({
@@ -107,7 +129,7 @@ const imageQueue = new PQueue({
 });
 const images = new Set();
 
-export const preloadImages = async (): Promise<void> => {
+export const preloadImages = async (type: EmojiType): Promise<void> => {
   // Preload images
   const preload = async (src: string) =>
     new Promise((resolve, reject) => {
@@ -123,11 +145,11 @@ export const preloadImages = async (): Promise<void> => {
   const start = Date.now();
 
   data.forEach(emoji => {
-    imageQueue.add(() => preload(makeImagePath(emoji.image)));
+    imageQueue.add(() => preload(makeImagePath(emoji, type)));
 
     if (emoji.skin_variations) {
       Object.values(emoji.skin_variations).forEach(variation => {
-        imageQueue.add(() => preload(makeImagePath(variation.image)));
+        imageQueue.add(() => preload(makeImagePath(variation, type)));
       });
     }
   });
@@ -139,7 +161,9 @@ export const preloadImages = async (): Promise<void> => {
 };
 
 const dataByShortName = keyBy(data, 'short_name');
-const imageByEmoji: { [key: string]: string } = {};
+const dataOrVariationByEmoji: {
+  [key: string]: EmojiData | EmojiSkinVariation;
+} = {};
 const dataByEmoji: { [key: string]: EmojiData } = {};
 
 export const dataByCategory = mapValues(
@@ -210,11 +234,12 @@ export function getEmojiData(
 
 export function getImagePath(
   shortName: keyof typeof dataByShortName,
+  type: EmojiType,
   skinTone?: SkinToneKey | number
 ): string {
   const emojiData = getEmojiData(shortName, skinTone);
 
-  return makeImagePath(emojiData.image);
+  return makeImagePath(emojiData, type);
 }
 
 const fuse = new Fuse(data, {
@@ -291,8 +316,15 @@ export function convertShortName(
   return unifiedToEmoji(emojiData.unified);
 }
 
-export function emojiToImage(emoji: string): string | undefined {
-  return getOwn(imageByEmoji, emoji);
+export function emojiToImage(
+  emoji: string,
+  type: EmojiType
+): string | undefined {
+  const dataOrVariation = getOwn(dataOrVariationByEmoji, emoji);
+  if (dataOrVariation) {
+    return makeImagePath(dataOrVariation, type);
+  }
+  return undefined;
 }
 
 export function emojiToData(emoji: string): EmojiData | undefined {
@@ -344,7 +376,7 @@ export function getSizeClass(str: string): SizeClassType {
 }
 
 data.forEach(emoji => {
-  const { short_name, short_names, skin_variations, image } = emoji;
+  const { short_name, short_names, skin_variations } = emoji;
 
   if (short_names) {
     short_names.forEach(name => {
@@ -352,13 +384,14 @@ data.forEach(emoji => {
     });
   }
 
-  imageByEmoji[convertShortName(short_name)] = makeImagePath(image);
+  dataOrVariationByEmoji[convertShortName(short_name)] = emoji;
   dataByEmoji[convertShortName(short_name)] = emoji;
 
   if (skin_variations) {
     Object.entries(skin_variations).forEach(([tone, variation]) => {
-      imageByEmoji[convertShortName(short_name, tone as SkinToneKey)] =
-        makeImagePath(variation.image);
+      dataOrVariationByEmoji[
+        convertShortName(short_name, tone as SkinToneKey)
+      ] = variation;
       dataByEmoji[convertShortName(short_name, tone as SkinToneKey)] = emoji;
     });
   }
